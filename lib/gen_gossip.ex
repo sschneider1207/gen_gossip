@@ -38,6 +38,8 @@ defmodule GenGossip do
     end
   end
 
+  # Cluster management api
+
   @spec start_link(atom, term, Keyword.t) :: GenServer.on_start
   def start_link(mod, args, opts \\ []) do
     GenServer.start_link(GenGossip.Server, [mod, args, opts], [name: mod])
@@ -48,18 +50,32 @@ defmodule GenGossip do
     GenServer.cast(__MODULE__, :stop)
   end
 
-  def distribute_gossip(gossip) do
-    GenServer.cast({__MODULE__, node()}, {:distribute, gossip})
+  def join(node) when node() === node do
+    {:error, :self_join}
   end
-
-  def send_gossip(to_node), do: send_gossip(node(), to_node)
-
-  def send_gossip(node, node), do: :ok
-  def send_gossip(from_node, to_node) do
-    GenServer.cast({__MODULE__, from_node}, {:send, to_node})
+  def join(node) do
+    case Node.ping(node) do
+      :pang ->
+        {:error, :not_reachable}
+      :pong ->
+        :ok # continue join
+    end
   end
 
   def rejoin(node, cluster_state) do
     GenServer.cast({__MODULE__, node}, {:rejoin, cluster_state})
+  end
+
+  # Gossip api
+
+  def distribute_gossip(gossip) do
+    GenServer.cast({__MODULE__, node()}, {:distribute, gossip})
+  end
+
+  def send_gossip(to_node, gossip), do: send_gossip(node(), to_node, gossip)
+
+  def send_gossip(node, node, _gossip), do: :ok
+  def send_gossip(from_node, to_node, gossip) do
+    GenServer.cast({__MODULE__, from_node}, {:send, to_node, gossip})
   end
 end
