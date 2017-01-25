@@ -5,7 +5,7 @@ defmodule GenGossip do
 
   @callback init(args :: term) :: {:ok, state} | {:stop, reason :: term}
 
-  @callback handle_gossip(msg, state) :: {:ok, state} | {:stop, reason :: term}
+  @callback handle_gossip(msg :: term, state) :: {:ok, state} | {:stop, reason :: term}
 
   @type state :: term
 
@@ -41,5 +41,25 @@ defmodule GenGossip do
   @spec start_link(atom, term, Keyword.t) :: GenServer.on_start
   def start_link(mod, args, opts \\ []) do
     GenServer.start_link(GenGossip.Server, [mod, args, opts], [name: mod])
+  end
+
+  @spec stop() :: :ok
+  def stop do
+    GenServer.cast(__MODULE__, :stop)
+  end
+
+  def distribute_gossip(gossip) do
+    GenServer.cast({__MODULE__, node()}, {:distribute, gossip})
+  end
+
+  def send_gossip(to_node), do: send_gossip(node(), to_node)
+
+  def send_gossip(node, node), do: :ok
+  def send_gossip(from_node, to_node) do
+    GenServer.cast({__MODULE__, from_node}, {:send, to_node})
+  end
+
+  def rejoin(node, cluster_state) do
+    GenServer.cast({__MODULE__, node}, {:rejoin, cluster_state})
   end
 end
