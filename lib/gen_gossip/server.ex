@@ -7,10 +7,25 @@ defmodule GenGossip.Server do
 
   defstruct [:mod, :mod_state, :tokens, :max_tokens, :interval, :cluster_state]
 
+  def rejoin(node, mod, state) do
+    GenServer.cast({mod, node}, {:rejoin, state})
+  end
+
+  def distribute_gossip(mod) do
+    GenServer.cast({mod, node()}, {:distribute})
+  end
+
+  def send_gossip(to_node, mod), do: send_gossip(node(), to_node, mod)
+
+  def send_gossip(node, node, _, _), do: :ok
+  def send_gossip(from_node, to_node, mod) do
+    GenServer.cast({mod, from_node}, {:send, to_node})
+  end
+
   @doc false
   def init([mod, args, opts]) do
     {tokens, interval} = Keyword.get(opts, :gossip_limit, @default_limit)
-    cluster_state = init_cluster_table(mod)
+    cluster_state = ClusterState.new(mod)
     state = struct(__MODULE__, [
       mod:           mod,
       max_tokens:    tokens,
@@ -28,16 +43,36 @@ defmodule GenGossip.Server do
     end
   end
 
-  defp init_cluster_table(mod) do
-    cluster_tab = :ets.new(mod, [:named_table, {:read_concurrency, true}])
-    cluster_state = ClusterState.new(mod)
-    true = :ets.insert(cluster_tab, {:cluster_state, cluster_state})
-    cluster_state
+  @doc false
+  def handle_call({:set_my_cluster_state, cluster_state}, _from, state) do
+    case ClusterState.Manager.set(state.mod, cluster_state) do
+      :ok ->
+        {:reply, :ok, %{state| cluster_state: cluster_state}}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
   end
 
-  @doc false
-  def handle_call(:get_cluster_state, _from, state) do
-    {:reply, {:ok, state.cluster_state}, state}
+  def handle_cast({:send, _to_node}, %{tokens: 0} = state) do
+    {:noreply, state}
+  end
+  def handle_cast({:send, to_node}, state) do
+    case state.mod.reconcile(to_node, state.mod_state) do
+      {:ok, dump, mod_state} ->
+        GenServer.cast({state.mod, to_node}, {:reconcile, state.cluster_state, dump})
+      {:stop, reason} ->
+        {:stop, reason}
+    end
+    {:noreply, %{state| tokens: state.tokens - 1}}
+  end
+  def handle_cast({:reconcile, cluster_state, dump}, state) do
+    case state.mod.handle_gossip({:reconcile, dump}, state.mod_state) do
+      {:ok, mod_state} ->
+        # compare cluster_states
+        {:noreply, state}
+      {:stop, reason} ->
+        {:stop, reason}
+    end
   end
 
   @doc false

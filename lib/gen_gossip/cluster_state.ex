@@ -1,12 +1,11 @@
 defmodule GenGossip.ClusterState do
-  @moduledoc false
   alias GenGossip.VectorClock
 
   @opaque t :: %__MODULE__{
       owner: term,
       metadata: metadata,
       mod: atom,
-      members: [Member.t],
+      members: [{term, Member.t}],
       vector_clock: VectorClock.t
   }
   @type metadata :: Keyword.t
@@ -30,36 +29,59 @@ defmodule GenGossip.ClusterState do
 
   @spec new(term) :: t
   def new(mod) do
-    struct(__MODULE__, [
-      owner:         node(),
+    cluster_state = struct(__MODULE__, [
+      owner:        node(),
       metadata:     [],
-      mod: mod,
+      mod:          mod,
       members:      [],
       vector_clock: VectorClock.fresh()
     ])
   end
-
-  @spec get(atom) :: {:ok, t} | {:error, reason}
-  def get(mod) do
-    try do
-      state = :ets.lookup_element(mod, :cluster_state, 2)
-      {:ok, state}
-    rescue
-      _ ->
-        GenServer.call(mod, :get_cluster_state)
-    end
+  
+  def add_member(pnode, state, node) do
+    set_member(pnode, state, node, :joining)
   end
 
-  @spec get(node, atom) :: {:ok, t} | {:error, reason} | {:badrpc, reason}
-  def get(node, mod) do
-    :rpc.block_call(node, __MODULE__, :get_cluster_state, [mod])
+  def remove_member(pnode, state, node) do
+    set_member(pnode, state, node, :invalid)
   end
 
-  def add_member() do
-
+  def leave_member(pnode, state, node) do
+    set_member(pnode, state, node, :leaving)
   end
 
-  def set_owner(cluster_state, node) do
-    struct(cluster_state, [owner: node])
+  def exit_member(pnode, state, node) do
+    set_member(pnode, state, node, :exiting)
+  end
+
+  def down_member(pnode, state, node) do
+    set_member(pnode, state, node, :down)
+  end
+
+  defp set_member(node, state, member, status) do
+    vector_clock = VectorClock.increment(state.vector_clock, node)
+    updated_state = update_members(node, state, member, status)
+    struct(updated_state, [vector_clock: vector_clock])
+  end
+
+  defp update_members(node, state, member, status) do
+    members = :orddict.update(member,
+                              &update_member(&1, status),
+                              default_member(member, status),
+                              state.members)
+    struct(__MODULE__, [members: members])
+  end
+
+  defp default_member(name, status) do
+    struct(Member, [vector_clock: VectorClock.fresh(), status: status, node: name])
+  end
+
+  defp update_member(member, status) do
+    vector_clock = VectorClock.increment(member.vector_clock, member.node)
+    struct(Member, [vector_clock: vector_clock, status: status])
+  end
+
+  def set_owner(state, node) do
+    struct(state, [owner: node])
   end
 end
